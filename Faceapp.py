@@ -2,6 +2,8 @@ import streamlit as st
 import cv2
 import numpy as np
 import tensorflow as tf
+from streamlit_webrtc import webrtc_streamer, VideoProcessorBase
+import av
 
 st.set_page_config(page_title="Face Mask Detection", layout="centered")
 
@@ -26,30 +28,18 @@ net = cv2.dnn.readNet(
     "deploy.prototxt"
 )
 
-run = st.checkbox("Start Camera")
+class VideoProcessor(VideoProcessorBase):
 
-FRAME_WINDOW = st.image([])
+    previous_label = "No Mask"
 
-previous_label = "No Mask"
+    def recv(self, frame):
 
-if run:
+        image = frame.to_ndarray(format="bgr24")
 
-    cap = cv2.VideoCapture(0)
-
-    while True:
-
-        ret, frame = cap.read()
-
-        if not ret:
-            st.error("Camera Not Detected")
-            break
-
-        frame = cv2.flip(frame, 1)
-
-        h, w = frame.shape[:2]
+        h, w = image.shape[:2]
 
         blob = cv2.dnn.blobFromImage(
-            cv2.resize(frame, (300, 300)),
+            cv2.resize(image, (300, 300)),
             1.0,
             (300, 300),
             (104.0, 177.0, 123.0)
@@ -74,7 +64,7 @@ if run:
                 x2 = min(w, x2)
                 y2 = min(h, y2)
 
-                face = frame[y1:y2, x1:x2]
+                face = image[y1:y2, x1:x2]
 
                 if face.size == 0:
                     continue
@@ -82,9 +72,7 @@ if run:
                 face_rgb = cv2.cvtColor(face, cv2.COLOR_BGR2RGB)
 
                 img = cv2.resize(face_rgb, (224, 224))
-
                 img = img.astype("float32") / 255.0
-
                 img = np.expand_dims(img, axis=0)
 
                 pred = model.predict(img, verbose=0)[0][0]
@@ -98,14 +86,14 @@ if run:
                     color = (0, 255, 0)
 
                 else:
-                    label = previous_label
+                    label = self.previous_label
 
                     if label == "No Mask":
                         color = (0, 0, 255)
                     else:
                         color = (0, 255, 0)
 
-                previous_label = label
+                self.previous_label = label
 
                 if label == "No Mask":
                     confidence = pred * 100
@@ -114,26 +102,23 @@ if run:
                     confidence = (1 - pred) * 100
                     text = f"Wearing Mask ({confidence:.2f}%)"
 
-                cv2.rectangle(
-                    frame,
-                    (x1, y1),
-                    (x2, y2),
-                    color,
-                    3
-                )
+                cv2.rectangle(image, (x1, y1), (x2, y2), color, 3)
 
                 cv2.putText(
-                    frame,
+                    image,
                     text,
                     (x1, y1 - 10),
                     cv2.FONT_HERSHEY_SIMPLEX,
-                    0.9,
+                    0.8,
                     color,
-                    3
+                    2
                 )
 
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        return av.VideoFrame.from_ndarray(image, format="bgr24")
 
-        FRAME_WINDOW.image(frame)
-
-    cap.release()
+webrtc_streamer(
+    key="mask-detection",
+    video_processor_factory=VideoProcessor,
+    media_stream_constraints={"video": True, "audio": False},
+    async_processing=True,
+)
